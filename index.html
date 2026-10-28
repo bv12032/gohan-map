@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ごはん地図</title>
+<meta name="description" content="好きなカレー屋さんとカフェを、地図といっしょに残すアプリ">
+<meta name="theme-color" content="#1E2A2E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ごはん地図">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@700;900&family=BIZ+UDPGothic:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: phone = map on top, list as a bottom sheet; desktop = list on the left, map on the right. One floating "＋" to add a shop. */
+:root {
+  --bg: #F6F7F5;
+  --panel: #FFFFFF;
+  --ink: #1E2A2E;
+  --muted: #5E6B6E;
+  --line: #DDE2DF;
+  --curry: #D99A00;      /* ターメリック */
+  --curry-ink: #2B1E00;
+  --cafe: #2F7F73;       /* 深いミントグリーン */
+  --other: #7A5BD0;
+  --accent: #1E2A2E;
+  --star: #E3A500;
+  --danger: #C2412D;
+  --font-display: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", sans-serif;
+  --font-body: "BIZ UDPGothic", "Hiragino Sans", "Yu Gothic", sans-serif;
+  --sheet-h: 46vh;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #121A1C; --panel: #1A2427; --ink: #E7EEEC; --muted: #9AA8A8; --line: #2C393C; --accent: #E7EEEC; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.6; overflow: hidden; }
+button, input, textarea, select { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--curry); outline-offset: 2px; }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; }
+[hidden] { display: none !important; }
+
+.app { position: fixed; inset: 0; display: grid; grid-template-rows: 1fr var(--sheet-h); }
+#map { width: 100%; height: 100%; background: #DDE5E2; }
+.leaflet-container { font-family: var(--font-body); }
+
+/* 上のバー */
+.topbar { position: absolute; z-index: 500; top: calc(10px + env(safe-area-inset-top, 0px)); left: max(10px, env(safe-area-inset-left, 0px)); right: max(10px, env(safe-area-inset-right, 0px)); display: flex; gap: 8px; align-items: center; pointer-events: none; }
+.brand { pointer-events: auto; display: flex; align-items: center; gap: 8px; background: var(--panel); border-radius: 999px; padding: 5px 14px 5px 6px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+.brand img { width: 30px; height: 30px; }
+.brand h1 { font-size: 17px; font-weight: 900; letter-spacing: .04em; }
+.topbar .sp { flex: 1; }
+.roundbtn { pointer-events: auto; width: 42px; height: 42px; border-radius: 50%; border: 0; background: var(--panel); box-shadow: 0 2px 10px rgba(0,0,0,.15); display: grid; place-items: center; cursor: pointer; }
+.roundbtn svg { width: 20px; height: 20px; fill: var(--ink); }
+
+/* 下のシート（リスト） */
+.sheet { background: var(--panel); border-top-left-radius: 18px; border-top-right-radius: 18px; box-shadow: 0 -4px 16px rgba(0,0,0,.12); position: relative; z-index: 600; display: grid; grid-template-rows: auto auto 1fr; grid-template-columns: minmax(0, 1fr); min-width: 0; min-height: 0; padding-left: max(14px, env(safe-area-inset-left, 0px)); padding-right: max(14px, env(safe-area-inset-right, 0px)); }
+.grab { width: 44px; height: 5px; border-radius: 3px; background: var(--line); margin: 8px auto 6px; border: 0; padding: 0; cursor: pointer; }
+.filters { display: grid; gap: 8px; padding-bottom: 8px; }
+.row { display: flex; gap: 6px; align-items: center; }
+.search { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); }
+.sort { padding: 7px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); }
+.chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip { white-space: nowrap; border: 1.5px solid var(--line); background: var(--panel); border-radius: 999px; padding: 3px 12px; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.chip .dot { width: 10px; height: 10px; border-radius: 50%; }
+.chip[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--panel); font-weight: 700; }
+.list { overflow-y: auto; min-height: 0; display: grid; gap: 8px; align-content: start; padding-bottom: calc(90px + env(safe-area-inset-bottom, 0px)); }
+.item { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); cursor: pointer; text-align: left; width: 100%; }
+.item:hover { border-color: var(--muted); }
+.thumb { width: 56px; height: 56px; border-radius: 10px; object-fit: cover; display: grid; place-items: center; font-family: var(--font-display); font-weight: 900; font-size: 22px; color: #fff; overflow: hidden; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.item .main { min-width: 0; display: grid; gap: 1px; }
+.item .name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .sub { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stars { color: var(--star); letter-spacing: 1px; font-size: 13px; }
+.badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.empty { text-align: center; color: var(--muted); padding: 22px 10px; display: grid; gap: 10px; justify-items: center; }
+.empty img { width: 120px; }
+
+.fab { position: fixed; z-index: 700; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); height: 56px; padding: 0 22px; border-radius: 999px; border: 0; background: var(--ink); color: var(--panel); font-family: var(--font-display); font-weight: 900; font-size: 17px; box-shadow: 0 6px 18px rgba(0,0,0,.25); cursor: pointer; }
+
+/* 地図のピン */
+.pin { width: 30px; height: 30px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); display: grid; place-items: center; border: 2.5px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+.pin span { transform: rotate(45deg); color: #fff; font-family: var(--font-display); font-weight: 900; font-size: 13px; }
+.pin.want { background: #fff !important; border-style: dashed; }
+.pin.want span { color: var(--ink); }
+.me { width: 16px; height: 16px; border-radius: 50%; background: #2B7BE4; border: 3px solid #fff; box-shadow: 0 0 0 6px rgba(43,123,228,.25); }
+.temp { width: 22px; height: 22px; border-radius: 50%; background: var(--danger); border: 3px solid #fff; box-shadow: 0 2px 8px rgba(0,0,0,.4); }
+
+/* 画面いっぱいのパネル（詳細・追加・設定） */
+.panel { position: fixed; z-index: 900; inset: auto 0 0 0; max-height: 88vh; overflow-y: auto; background: var(--panel); border-top-left-radius: 20px; border-top-right-radius: 20px; box-shadow: 0 -8px 30px rgba(0,0,0,.25); padding: 16px max(16px, env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); display: grid; gap: 12px; }
+.scrim { position: fixed; inset: 0; z-index: 850; background: rgba(0,0,0,.35); }
+.phead { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.phead h2 { font-size: 20px; min-width: 0; overflow-wrap: anywhere; }
+.x { border: 0; background: var(--bg); width: 36px; height: 36px; border-radius: 50%; cursor: pointer; font-size: 18px; flex: none; }
+.field { display: grid; gap: 4px; }
+.field > label, .lab { font-size: 13px; color: var(--muted); font-weight: 700; }
+.inp { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); }
+textarea.inp { min-height: 4.2em; resize: vertical; }
+.seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.seg button { border: 1.5px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 14px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.seg button[aria-pressed="true"] { border-color: var(--ink); font-weight: 700; box-shadow: inset 0 0 0 1px var(--ink); }
+.starpick { display: flex; gap: 2px; }
+.starpick button { border: 0; background: none; font-size: 30px; line-height: 1; padding: 2px; cursor: pointer; color: var(--line); }
+.starpick button.on { color: var(--star); }
+.btn { border: 1px solid var(--line); background: var(--bg); padding: 9px 16px; border-radius: 999px; cursor: pointer; font-weight: 700; display: inline-flex; gap: 6px; align-items: center; justify-content: center; text-decoration: none; color: var(--ink); }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: var(--panel); }
+.btn.danger { color: var(--danger); border-color: var(--danger); background: transparent; }
+.btn.small { padding: 5px 12px; font-size: 13px; }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.locbox { border: 1px dashed var(--line); border-radius: 12px; padding: 10px; display: grid; gap: 8px; }
+.locstate { font-size: 14px; }
+.locstate.ok { color: var(--cafe); font-weight: 700; }
+.results { display: grid; gap: 4px; }
+.results button { text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 6px 10px; cursor: pointer; font-size: 13px; }
+.photos { display: flex; gap: 8px; overflow-x: auto; }
+.photos:empty { display: none; }
+.photos .ph { position: relative; flex: none; }
+.photos img { width: 110px; height: 110px; object-fit: cover; border-radius: 12px; display: block; }
+.photos .del { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 50%; border: 0; background: rgba(0,0,0,.6); color: #fff; cursor: pointer; }
+.hero { width: 100%; max-width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 14px; display: block; }
+.kv { display: grid; gap: 6px; }
+.kv div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; }
+.kv dt { color: var(--muted); font-size: 13px; }
+.kv dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.visits { display: flex; flex-wrap: wrap; gap: 6px; }
+.visits span { white-space: nowrap; font-size: 12.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 1px 10px; font-variant-numeric: tabular-nums; }
+.banner { position: fixed; z-index: 880; left: 50%; transform: translateX(-50%); top: calc(64px + env(safe-area-inset-top, 0px)); background: var(--ink); color: var(--panel); padding: 10px 16px; border-radius: 14px; display: flex; gap: 10px; align-items: center; box-shadow: 0 6px 18px rgba(0,0,0,.3); width: max-content; max-width: calc(100vw - 32px); }
+.banner button { border: 0; background: var(--panel); color: var(--ink); border-radius: 999px; padding: 4px 12px; cursor: pointer; font-weight: 700; }
+.toast { position: fixed; z-index: 1000; left: 50%; transform: translateX(-50%); bottom: calc(90px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--panel); padding: 8px 16px; border-radius: 999px; font-weight: 700; font-size: 14px; }
+.note { font-size: 13px; color: var(--muted); }
+.count { font-size: 13px; color: var(--muted); }
+
+@media (min-width: 900px) {
+  .app { grid-template-rows: 1fr; grid-template-columns: 400px 1fr; }
+  .sheet { grid-row: 1; grid-column: 1; border-radius: 0; box-shadow: 2px 0 12px rgba(0,0,0,.08); padding-top: calc(70px + env(safe-area-inset-top, 0px)); }
+  #map { grid-row: 1; grid-column: 2; }
+  .grab { display: none; }
+  .topbar { right: auto; }
+  .panel { inset: 0 auto 0 0; width: 440px; max-height: none; border-radius: 0; }
+  .fab { left: 330px; right: auto; }
+  .fab { left: 300px; }
+}
+@media (prefers-reduced-motion: no-preference) { .panel { animation: up .2s ease-out; } @keyframes up { from { transform: translateY(24px); opacity: .6; } } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="map" role="application" aria-label="お店の地図"></div>
+  <section class="sheet" id="sheet" aria-label="お店のリスト">
+    <button class="grab" id="grab" type="button" aria-label="リストを広げる・たたむ"></button>
+    <div class="filters">
+      <div class="row">
+        <input class="search" id="q" type="search" placeholder="店名・メニュー・メモでさがす" aria-label="さがす">
+        <select class="sort" id="sort" aria-label="ならびかえ">
+          <option value="near">近い順</option>
+          <option value="star">★が多い順</option>
+          <option value="recent">最近行った順</option>
+          <option value="new">登録が新しい順</option>
+        </select>
+      </div>
+      <div class="chips" id="chips" role="group" aria-label="しぼりこみ"></div>
+    </div>
+    <div class="list" id="list"></div>
+  </section>
+</div>
+
+<div class="topbar">
+  <div class="brand"><img src="icon.svg" alt=""><h1>ごはん地図</h1></div>
+  <div class="sp"></div>
+  <button class="roundbtn" id="b-locate" type="button" aria-label="今いる場所へ"><svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9 3h-2.07A7 7 0 0 0 13 5.07V3h-2v2.07A7 7 0 0 0 5.07 11H3v2h2.07A7 7 0 0 0 11 18.93V21h2v-2.07A7 7 0 0 0 18.93 13H21v-2zm-9 6a5 5 0 1 1 0-10 5 5 0 0 1 0 10z"/></svg></button>
+  <button class="roundbtn" id="b-settings" type="button" aria-label="設定・バックアップ"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.3 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.3-2.9c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg></button>
+</div>
+
+<button class="fab" id="b-add" type="button">＋ お店を追加</button>
+
+<div class="scrim" id="scrim" hidden></div>
+<section class="panel" id="p-detail" hidden aria-labelledby="d-name"></section>
+
+<section class="panel" id="p-form" hidden aria-labelledby="f-title">
+  <div class="phead"><h2 id="f-title">お店を追加</h2><button class="x" type="button" data-close aria-label="とじる">×</button></div>
+  <div class="field"><label for="f-name">お店の名前</label><input class="inp" id="f-name" autocomplete="off" required></div>
+  <div class="field"><span class="lab">しゅるい</span><div class="seg" id="f-cat"></div></div>
+  <div class="field">
+    <span class="lab">場所</span>
+    <div class="locbox">
+      <p class="locstate" id="f-locstate">まだ決まっていません</p>
+      <div class="btns">
+        <button class="btn small" type="button" id="f-pick">地図をタップして決める</button>
+        <button class="btn small" type="button" id="f-here">今いる場所にする</button>
+      </div>
+      <div class="row"><input class="inp" id="f-addr" placeholder="住所・駅名・店名で探す／Googleマップのリンクを貼る" autocomplete="off"><button class="btn small" type="button" id="f-find">探す</button></div>
+      <div class="results" id="f-results"></div>
+    </div>
+  </div>
+  <div class="field"><span class="lab">行った？</span>
+    <div class="seg" id="f-status">
+      <button type="button" data-v="went" aria-pressed="true">行った</button>
+      <button type="button" data-v="want" aria-pressed="false">行きたい</button>
+    </div>
+  </div>
+  <div class="field" id="f-starwrap"><span class="lab">おきにいり度</span><div class="starpick" id="f-stars"></div></div>
+  <div class="field" id="f-datewrap"><label for="f-date">行った日</label><input class="inp" id="f-date" type="date"></div>
+  <div class="field"><label for="f-menu">おすすめメニュー</label><input class="inp" id="f-menu" autocomplete="off" placeholder="例：チキンカレー 辛さ3、バターチキン"></div>
+  <div class="field"><label for="f-memo">メモ</label><textarea class="inp" id="f-memo" placeholder="例：平日ランチは混む。子どもイスあり。"></textarea></div>
+  <div class="field"><span class="lab">写真</span>
+    <div class="photos" id="f-photos"></div>
+    <div><label class="btn small" for="f-file">写真をえらぶ</label><input id="f-file" type="file" accept="image/*" multiple hidden></div>
+  </div>
+  <div class="btns"><button class="btn primary" type="button" id="f-save">保存する</button><button class="btn" type="button" data-close>やめる</button></div>
+</section>
+
+<section class="panel" id="p-settings" hidden aria-labelledby="s-title">
+  <div class="phead"><h2 id="s-title">設定・バックアップ</h2><button class="x" type="button" data-close aria-label="とじる">×</button></div>
+  <p class="note">記録は、この端末（このブラウザ）の中だけに保存されます。インターネットには送られません。スマホとパソコンで同じにしたいときや、機種変更のときは、バックアップを使ってください。</p>
+  <div class="btns">
+    <button class="btn" type="button" id="s-export">バックアップを保存</button>
+    <label class="btn" for="s-import">バックアップを読みこむ</label><input type="file" id="s-import" accept=".json,application/json" hidden>
+  </div>
+  <p class="note" id="s-info"></p>
+  <p class="note">地図：© OpenStreetMap の協力者たち。場所さがし：Nominatim（OpenStreetMap）。</p>
+</section>
+
+<div class="banner" id="banner" hidden><span>地図をタップして、お店の場所を決めてね</span><button type="button" id="banner-x">やめる</button></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const CATS = {
+    curry: { name: "カレー", color: "var(--curry)", hex: "#D99A00", ch: "カ" },
+    cafe:  { name: "カフェ", color: "var(--cafe)",  hex: "#2F7F73", ch: "茶" },
+    other: { name: "そのほか", color: "var(--other)", hex: "#7A5BD0", ch: "食" },
+  };
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+  const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  function toast(t) { const el = $("toast"); el.textContent = t; el.hidden = false; clearTimeout(el._t); el._t = setTimeout(() => el.hidden = true, 2200); }
+
+  // ---------- 保存（IndexedDB） ----------
+  let dbp = null;
+  function idb() {
+    if (dbp) return dbp;
+    dbp = new Promise((res, rej) => {
+      const r = indexedDB.open("gohan-map", 1);
+      r.onupgradeneeded = () => { const d = r.result; d.createObjectStore("shops", { keyPath: "id" }); d.createObjectStore("photos", { keyPath: "id" }); };
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+    return dbp;
+  }
+  async function tx(store, mode, fn) {
+    const d = await idb();
+    return new Promise((res, rej) => {
+      const t = d.transaction(store, mode); const s = t.objectStore(store);
+      let out; const r = fn(s); if (r) r.onsuccess = () => out = r.result;
+      t.oncomplete = () => res(out); t.onerror = () => rej(t.error);
+    });
+  }
+  const allShops = () => tx("shops", "readonly", s => s.getAll());
+  const putShop = sh => tx("shops", "readwrite", s => s.put(sh));
+  const delShop = id => tx("shops", "readwrite", s => s.delete(id));
+  const getPhoto = id => tx("photos", "readonly", s => s.get(id));
+  const putPhoto = p => tx("photos", "readwrite", s => s.put(p));
+  const delPhoto = id => tx("photos", "readwrite", s => s.delete(id));
+  const allPhotos = () => tx("photos", "readonly", s => s.getAll());
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
+
+  // 写真のURL（使い回す）
+  const urlCache = new Map();
+  async function photoUrl(id) {
+    if (urlCache.has(id)) return urlCache.get(id);
+    const p = await getPhoto(id); if (!p) return null;
+    const u = URL.createObjectURL(p.blob); urlCache.set(id, u); return u;
+  }
+  function shrink(file) {
+    return new Promise((res, rej) => {
+      const img = new Image(); const u = URL.createObjectURL(file);
+      img.onload = () => {
+        const max = 1200, sc = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement("canvas"); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(u);
+        c.toBlob(b => b ? res(b) : rej(new Error("画像を読めませんでした")), "image/jpeg", 0.8);
+      };
+      img.onerror = () => { URL.revokeObjectURL(u); rej(new Error("画像を読めませんでした")); };
+      img.src = u;
+    });
+  }
+
+  // ---------- 地図 ----------
+  const map = L.map("map", { zoomControl: false }).setView([35.681, 139.767], 11);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' }).addTo(map);
+  L.control.zoom({ position: "bottomleft" }).addTo(map);
+  const layer = L.layerGroup().addTo(map);
+  let meMarker = null, me = null, tempMarker = null;
+
+  function pinIcon(sh) {
+    const c = CATS[sh.cat] || CATS.other;
+    const want = sh.status === "want";
+    return L.divIcon({ className: "", iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -28],
+      html: `<div class="pin${want ? " want" : ""}" style="background:${c.hex};border-color:${want ? c.hex : "#fff"}"><span>${c.ch}</span></div>` });
+  }
+  function locate(fly) {
+    if (!navigator.geolocation) { toast("この端末では場所がわかりません"); return Promise.resolve(null); }
+    return new Promise(res => navigator.geolocation.getCurrentPosition(p => {
+      me = [p.coords.latitude, p.coords.longitude];
+      if (!meMarker) meMarker = L.marker(me, { icon: L.divIcon({ className: "", html: '<div class="me"></div>', iconSize: [16, 16], iconAnchor: [8, 8] }), interactive: false }).addTo(map);
+      else meMarker.setLatLng(me);
+      if (fly) map.setView(me, 15);
+      render(); res(me);
+    }, () => { toast("場所をつかめませんでした（位置情報の許可を確認してね）"); res(null); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }));
+  }
+  $("b-locate").onclick = () => locate(true);
+
+  // ---------- 一覧 ----------
+  let shops = [], catFilter = "all";
+  const dist = (a, b) => { const R = 6371, t = Math.PI / 180, dLa = (b[0] - a[0]) * t, dLo = (b[1] - a[1]) * t; const h = Math.sin(dLa / 2) ** 2 + Math.cos(a[0] * t) * Math.cos(b[0] * t) * Math.sin(dLo / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); };
+  const kmText = km => km < 1 ? Math.round(km * 1000) + "m" : km.toFixed(1) + "km";
+  const lastVisit = sh => (sh.visits || []).slice().sort().pop() || "";
+  const starText = n => "★".repeat(n || 0) + "☆".repeat(5 - (n || 0));
+
+  function renderChips() {
+    const n = k => shops.filter(s => k === "all" ? true : k === "want" ? s.status === "want" : s.cat === k).length;
+    const items = [["all", "ぜんぶ", null], ["curry", "カレー", CATS.curry.hex], ["cafe", "カフェ", CATS.cafe.hex], ["other", "そのほか", CATS.other.hex], ["want", "行きたい", null]];
+    $("chips").innerHTML = items.map(([k, t, col]) => `<button class="chip" type="button" data-k="${k}" aria-pressed="${k === catFilter}">${col ? `<span class="dot" style="background:${col}"></span>` : ""}${t} <span class="count">${n(k)}</span></button>`).join("");
+  }
+  $("chips").onclick = e => { const b = e.target.closest(".chip"); if (!b) return; catFilter = b.dataset.k; render(); };
+  $("q").oninput = render; $("sort").onchange = render;
+
+  async function render() {
+    renderChips();
+    const q = $("q").value.trim().toLowerCase();
+    let rows = shops.filter(s => (catFilter === "all" || (catFilter === "want" ? s.status === "want" : s.cat === catFilter))
+      && (!q || [s.name, s.menu, s.memo, s.address].join(" ").toLowerCase().includes(q)));
+    const sort = $("sort").value;
+    if (sort === "near" && me) rows.sort((a, b) => dist(me, [a.lat, a.lng]) - dist(me, [b.lat, b.lng]));
+    else if (sort === "star") rows.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+    else if (sort === "recent" || sort === "near") rows.sort((a, b) => lastVisit(b).localeCompare(lastVisit(a)) || b.updated - a.updated);
+    else rows.sort((a, b) => b.created - a.created);
+
+    layer.clearLayers();
+    rows.forEach(s => L.marker([s.lat, s.lng], { icon: pinIcon(s), title: s.name, keyboard: false }).on("click", () => openDetail(s.id)).addTo(layer));
+
+    if (!shops.length) {
+      $("list").innerHTML = `<div class="empty"><img src="icon.svg" alt=""><b>まだお店がありません</b><span class="note">右下の「＋ お店を追加」から、好きなカレー屋さんやカフェを入れてみよう。</span></div>`;
+      return;
+    }
+    if (!rows.length) { $("list").innerHTML = `<div class="empty">見つかりませんでした</div>`; return; }
+    $("list").innerHTML = rows.map(s => {
+      const c = CATS[s.cat] || CATS.other;
+      const d = me ? kmText(dist(me, [s.lat, s.lng])) : "";
+      const lv = lastVisit(s);
+      const sub = s.status === "want" ? `<span class="badge" style="color:${c.hex}">行きたい</span>` : `<span class="stars" aria-label="おきにいり度 ${s.rating || 0}">${starText(s.rating)}</span>`;
+      return `<button class="item" type="button" data-id="${s.id}">
+        <div class="thumb" style="background:${c.hex}" data-photo="${(s.photos || [])[0] || ""}">${c.ch}</div>
+        <div class="main"><div class="name">${esc(s.name)}</div><div class="sub">${sub} ${esc(s.menu || "")}</div><div class="sub">${lv ? "最後に行った日 " + lv.replace(/-/g, "/") : esc(s.address || "")}</div></div>
+        <div class="sub">${d}</div></button>`;
+    }).join("");
+    for (const el of $("list").querySelectorAll("[data-photo]")) {
+      const id = el.dataset.photo; if (!id) continue;
+      const u = await photoUrl(id); if (u && el.isConnected) el.innerHTML = `<img src="${u}" alt="">`;
+    }
+  }
+  $("list").onclick = e => { const b = e.target.closest(".item"); if (b) openDetail(b.dataset.id, true); };
+  $("grab").onclick = () => { const r = document.documentElement.style; r.setProperty("--sheet-h", getComputedStyle(document.documentElement).getPropertyValue("--sheet-h").trim() === "78vh" ? "46vh" : "78vh"); setTimeout(() => map.invalidateSize(), 50); };
+
+  // ---------- パネル ----------
+  function openPanel(id) { ["p-detail", "p-form", "p-settings"].forEach(p => $(p).hidden = p !== id); $("scrim").hidden = false; }
+  function closePanels() { ["p-detail", "p-form", "p-settings"].forEach(p => $(p).hidden = true); $("scrim").hidden = true; clearTemp(); }
+  $("scrim").onclick = () => closePanels();
+  document.addEventListener("click", e => { if (e.target.closest("[data-close]")) closePanels(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { if (!$("banner").hidden) stopPick(); else closePanels(); } });
+
+  // 詳細
+  async function openDetail(id, fly) {
+    const s = shops.find(x => x.id === id); if (!s) return;
+    if (fly) map.setView([s.lat, s.lng], Math.max(map.getZoom(), 16));
+    const c = CATS[s.cat] || CATS.other;
+    const gq = encodeURIComponent(s.name + " " + (s.address || ""));
+    const gmap = `https://www.google.com/maps/search/?api=1&query=${gq}`;
+    const route = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`;
+    const visits = (s.visits || []).slice().sort().reverse();
+    const P = $("p-detail");
+    P.innerHTML = `<div class="phead"><h2 id="d-name">${esc(s.name)}</h2><button class="x" type="button" data-close aria-label="とじる">×</button></div>
+      <div class="row" style="gap:8px;flex-wrap:wrap"><span class="badge" style="color:${c.hex}">${c.name}</span>${s.status === "want" ? `<span class="badge">行きたい</span>` : `<span class="stars" style="font-size:18px">${starText(s.rating)}</span>`}${me ? `<span class="note">ここから ${kmText(dist(me, [s.lat, s.lng]))}</span>` : ""}</div>
+      <div class="photos" id="d-photos"></div>
+      <dl class="kv">
+        ${s.menu ? `<div><dt>おすすめ</dt><dd>${esc(s.menu)}</dd></div>` : ""}
+        ${s.memo ? `<div><dt>メモ</dt><dd>${esc(s.memo)}</dd></div>` : ""}
+        ${s.address ? `<div><dt>場所</dt><dd>${esc(s.address)}</dd></div>` : ""}
+        <div><dt>行った日</dt><dd>${visits.length ? `<div class="visits">${visits.map(v => `<span>${v.replace(/-/g, "/")}</span>`).join("")}</div>` : "まだ"}</dd></div>
+      </dl>
+      <div class="btns">
+        <button class="btn primary" type="button" id="d-went">今日行った！</button>
+        <a class="btn" href="${gmap}" target="_blank" rel="noopener">Googleマップで見る</a>
+        <a class="btn" href="${route}" target="_blank" rel="noopener">ここへの行き方</a>
+      </div>
+      <div class="btns"><button class="btn small" type="button" id="d-edit">直す</button><button class="btn small danger" type="button" id="d-del">消す</button></div>`;
+    openPanel("p-detail");
+    const box = $("d-photos");
+    for (const pid of s.photos || []) { const u = await photoUrl(pid); if (u) box.insertAdjacentHTML("beforeend", `<div class="ph"><img src="${u}" alt="${esc(s.name)}の写真"></div>`); }
+    $("d-went").onclick = async () => {
+      s.visits = Array.from(new Set([...(s.visits || []), today()])); if (s.status === "want") s.status = "went";
+      s.updated = Date.now(); await putShop(s); toast("今日の日付を記録しました"); await reload(); openDetail(s.id);
+    };
+    $("d-edit").onclick = () => openForm(s);
+    const del = $("d-del");
+    del.onclick = async () => {
+      if (!del.dataset.armed) { del.dataset.armed = "1"; del.textContent = "本当に消す？（もう一度押す）"; setTimeout(() => { if (del.isConnected) { delete del.dataset.armed; del.textContent = "消す"; } }, 4000); return; }
+      for (const pid of s.photos || []) await delPhoto(pid);
+      await delShop(s.id); closePanels(); toast("消しました"); reload();
+    };
+  }
+
+  // 追加・編集フォーム
+  let draft = null;
+  function setSeg(el, v) { el.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === v))); }
+  $("f-cat").innerHTML = Object.entries(CATS).map(([k, c]) => `<button type="button" data-v="${k}" aria-pressed="false"><span class="dot" style="width:10px;height:10px;border-radius:50%;background:${c.hex}"></span>${c.name}</button>`).join("");
+  $("f-stars").innerHTML = [1, 2, 3, 4, 5].map(n => `<button type="button" data-n="${n}" aria-label="${n}">★</button>`).join("");
+  $("f-cat").onclick = e => { const b = e.target.closest("button"); if (!b) return; draft.cat = b.dataset.v; setSeg($("f-cat"), draft.cat); };
+  $("f-status").onclick = e => { const b = e.target.closest("button"); if (!b) return; draft.status = b.dataset.v; syncStatus(); };
+  $("f-stars").onclick = e => { const b = e.target.closest("button"); if (!b) return; const n = +b.dataset.n; draft.rating = draft.rating === n ? 0 : n; syncStars(); };
+  function syncStars() { $("f-stars").querySelectorAll("button").forEach(b => b.classList.toggle("on", +b.dataset.n <= (draft.rating || 0))); }
+  function syncStatus() { setSeg($("f-status"), draft.status); $("f-starwrap").hidden = draft.status === "want"; $("f-datewrap").hidden = draft.status === "want"; }
+  function syncLoc() {
+    const el = $("f-locstate");
+    if (draft.lat != null) { el.textContent = "場所が決まりました" + (draft.address ? "：" + draft.address : ""); el.className = "locstate ok"; showTemp([draft.lat, draft.lng]); }
+    else { el.textContent = "まだ決まっていません"; el.className = "locstate"; }
+  }
+  async function syncPhotos() {
+    const box = $("f-photos"); box.innerHTML = "";
+    for (const pid of draft.photos) { const u = await photoUrl(pid); if (u) box.insertAdjacentHTML("beforeend", `<div class="ph"><img src="${u}" alt=""><button class="del" type="button" data-pid="${pid}" aria-label="この写真を外す">×</button></div>`); }
+  }
+  $("f-photos").onclick = e => { const b = e.target.closest(".del"); if (!b) return; draft.photos = draft.photos.filter(p => p !== b.dataset.pid); draft.removed.push(b.dataset.pid); syncPhotos(); };
+  $("f-file").onchange = async e => {
+    const files = [...e.target.files]; e.target.value = "";
+    for (const f of files) {
+      try { const blob = await shrink(f); const id = newId(); await putPhoto({ id, blob }); draft.photos.push(id); draft.added.push(id); }
+      catch (err) { toast(err.message); }
+    }
+    syncPhotos();
+  };
+  function showTemp(ll) { if (tempMarker) tempMarker.setLatLng(ll); else tempMarker = L.marker(ll, { icon: L.divIcon({ className: "", html: '<div class="temp"></div>', iconSize: [22, 22], iconAnchor: [11, 11] }), interactive: false }).addTo(map); }
+  function clearTemp() { if (tempMarker) { map.removeLayer(tempMarker); tempMarker = null; } }
+
+  function openForm(s) {
+    const editing = !!s;
+    draft = s ? { ...s, photos: [...(s.photos || [])], visits: [...(s.visits || [])], added: [], removed: [] }
+              : { id: null, name: "", cat: "curry", status: "went", rating: 0, lat: null, lng: null, address: "", menu: "", memo: "", photos: [], visits: [], added: [], removed: [] };
+    $("f-title").textContent = editing ? "お店を直す" : "お店を追加";
+    $("f-name").value = draft.name; $("f-menu").value = draft.menu || ""; $("f-memo").value = draft.memo || "";
+    $("f-date").value = editing ? (lastVisit(draft) || "") : today();
+    $("f-addr").value = ""; $("f-results").innerHTML = "";
+    setSeg($("f-cat"), draft.cat); syncStatus(); syncStars(); syncLoc(); syncPhotos();
+    openPanel("p-form"); if (!editing) setTimeout(() => $("f-name").focus(), 60);
+  }
+  $("b-add").onclick = () => openForm(null);
+
+  // 場所：地図タップ
+  let picking = false;
+  $("f-pick").onclick = () => { picking = true; ["p-form"].forEach(p => $(p).hidden = true); $("scrim").hidden = true; $("banner").hidden = false; };
+  function stopPick() { picking = false; $("banner").hidden = true; openPanel("p-form"); }
+  $("banner-x").onclick = stopPick;
+  map.on("click", e => { if (!picking) return; draft.lat = e.latlng.lat; draft.lng = e.latlng.lng; draft.address = ""; stopPick(); syncLoc(); });
+  // 場所：現在地
+  $("f-here").onclick = async () => { const p = await locate(false); if (!p) return; draft.lat = p[0]; draft.lng = p[1]; draft.address = ""; syncLoc(); map.setView(p, 17); };
+  // 場所：住所検索・Googleマップのリンク
+  function fromGoogleUrl(t) {
+    let m = t.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) || t.match(/[?&](?:q|query|ll|destination)=(-?\d+\.\d+),\s*(-?\d+\.\d+)/) || t.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || t.match(/^\s*(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/);
+    return m ? [parseFloat(m[1]), parseFloat(m[2])] : null;
+  }
+  async function find() {
+    const t = $("f-addr").value.trim(); if (!t) return;
+    const ll = fromGoogleUrl(t);
+    if (ll) { draft.lat = ll[0]; draft.lng = ll[1]; syncLoc(); map.setView(ll, 17); $("f-results").innerHTML = ""; return; }
+    if (/goo\.gl|maps\.app/.test(t)) { $("f-results").innerHTML = `<p class="note">短いリンクは読めません。Googleマップで場所を開き、ブラウザの上に出る長いURLを貼るか、住所で探してね。</p>`; return; }
+    $("f-results").innerHTML = `<p class="note">探しています…</p>`;
+    try {
+      const r = await fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=jp&accept-language=ja&q=" + encodeURIComponent(t));
+      const js = await r.json();
+      if (!js.length) { $("f-results").innerHTML = `<p class="note">見つかりませんでした。駅名や住所で試すか、地図をタップして決めてね。</p>`; return; }
+      $("f-results").innerHTML = js.map((x, i) => `<button type="button" data-i="${i}">${esc(x.display_name)}</button>`).join("");
+      $("f-results").onclick = e => { const b = e.target.closest("button"); if (!b) return; const x = js[+b.dataset.i];
+        draft.lat = +x.lat; draft.lng = +x.lon; draft.address = x.display_name.split(",").slice(0, 3).join(" ").trim(); syncLoc(); map.setView([draft.lat, draft.lng], 17); $("f-results").innerHTML = ""; };
+    } catch (e) { $("f-results").innerHTML = `<p class="note">探せませんでした（ネットにつながっているか確認してね）</p>`; }
+  }
+  $("f-find").onclick = find; $("f-addr").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); find(); } };
+
+  $("f-save").onclick = async () => {
+    const name = $("f-name").value.trim();
+    if (!name) { toast("お店の名前を入れてね"); $("f-name").focus(); return; }
+    if (draft.lat == null) { toast("場所を決めてね"); return; }
+    const d = $("f-date").value;
+    const visits = new Set(draft.visits); if (draft.status === "went" && d) visits.add(d);
+    const sh = { id: draft.id || newId(), name, cat: draft.cat, status: draft.status, rating: draft.status === "want" ? 0 : draft.rating || 0,
+      lat: draft.lat, lng: draft.lng, address: draft.address || "", menu: $("f-menu").value.trim(), memo: $("f-memo").value.trim(),
+      photos: draft.photos, visits: [...visits].sort(), created: draft.created || Date.now(), updated: Date.now() };
+    await putShop(sh);
+    for (const pid of draft.removed) await delPhoto(pid);
+    draft.added = []; draft = null; clearTemp();
+    toast("保存しました"); await reload(); openDetail(sh.id, true);
+  };
+  // 保存せずに閉じたら、追加した写真は片づける
+  const origClose = closePanels;
+  closePanels = function () { if (draft && draft.added.length && $("p-form").hidden === false) draft.added.forEach(id => delPhoto(id)); if (!$("p-form").hidden) draft = null; origClose(); };
+
+  // ---------- 設定・バックアップ ----------
+  $("b-settings").onclick = async () => {
+    const ps = await allPhotos();
+    $("s-info").textContent = `お店 ${shops.length}件・写真 ${ps.length}枚を記録中`;
+    openPanel("p-settings");
+  };
+  const blobToData = b => new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(b); });
+  $("s-export").onclick = async () => {
+    const ps = await allPhotos();
+    const photos = {}; for (const p of ps) photos[p.id] = await blobToData(p.blob);
+    const data = JSON.stringify({ app: "gohan-map", v: 1, exported: new Date().toISOString(), shops, photos });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([data], { type: "application/json" }));
+    a.download = `ごはん地図_${today()}.json`; document.body.appendChild(a); a.click(); a.remove();
+    toast("バックアップを保存しました");
+  };
+  $("s-import").onchange = e => {
+    const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+    const r = new FileReader();
+    r.onload = async () => {
+      let js; try { js = JSON.parse(r.result); } catch (err) { toast("バックアップのファイルではないようです"); return; }
+      if (js.app !== "gohan-map" || !Array.isArray(js.shops)) { toast("バックアップのファイルではないようです"); return; }
+      let added = 0, updated = 0;
+      for (const [id, data] of Object.entries(js.photos || {})) { const blob = await (await fetch(data)).blob(); await putPhoto({ id, blob }); }
+      for (const s of js.shops) {
+        const cur = shops.find(x => x.id === s.id);
+        if (!cur) { await putShop(s); added++; }
+        else if ((s.updated || 0) > (cur.updated || 0)) { await putShop(s); updated++; }
+      }
+      toast(`読みこみました（新しく ${added}件・更新 ${updated}件）`); closePanels(); reload();
+    };
+    r.readAsText(f);
+  };
+
+  async function reload() { shops = await allShops(); render(); }
+  setTimeout(() => map.invalidateSize(), 300);
+  (async () => {
+    await reload();
+    map.invalidateSize();
+    if (shops.length === 1) map.setView([shops[0].lat, shops[0].lng], 15);
+    else if (shops.length) map.fitBounds(L.latLngBounds(shops.map(s => [s.lat, s.lng])).pad(0.2), { maxZoom: 15 });
+    locate(!shops.length);
+  })();
+  window.addEventListener("resize", () => map.invalidateSize());
+})();
+</script>
+</body>
+</html>
